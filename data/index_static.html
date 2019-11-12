@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>ESP8266 POV LED</title>
+  <style type="text/css" media="">
+    input {display: block;}
+    code {display: block;}
+    #image-canvas {height: 512px; width: 512px;}
+    div.g-ctl>p, div.g-ctl>input {
+      display: inline-block;
+    }
+    div.g-ctl{
+      width: 500px;
+    }
+    div.g-ctl>p{
+      width: 70px;
+    }
+    #code-gen{
+      height: 10em;
+      scroll-behavior: smooth;
+      overflow: auto;
+    }
+  </style>
+</head>
+<body>
+  <h1>ESP8266 POV LED Image Converter</h1>
+  <canvas id="image-canvas" height=1366 width=1366></canvas>
+  <div class="g-ctl">
+    <input type="file" name="imageUpload" id="imageUpload">
+    <button id="btn-upload" type="button">Upload</button>
+  </div>
+  <div class="display-ctl">
+    <div class="g-ctl"> 
+      <p>亮度</p>
+      <input id="rg-brightness" type="range" min="1" max="16" value="1"/>
+      <p id="lbl-brightness">--</p>
+    </div>
+    <div class="g-ctl">
+      <p>Gamma</p>
+      <input id="rg-gamma" type="range" min="1" max="100" value="30"/>
+      <p id="lbl-gamma">--</p>
+    </div>
+    <div class="g-ctl">
+      <p>旋转</p>
+      <input id="rg-rotate" type="range" min="0" max="127" value="0"/>
+      <p id="lbl-rotate">--</p>
+    </div>
+  </div>
+  <input type="text" name="game-ctl" id="game-ctl">
+
+  <code id="code-gen"><code>
+  <script charset="utf-8">
+    let SCANLINES = 128;
+    let LEDNUM = 16;
+    let CANVAS_W = 1366;
+    let CANVAS_H = 1366;
+    let data = null;
+    let socket = null;
+
+
+    function loadImage(src, process){
+      if (!src.type.match(/image.*/)) {
+        window.confirm("only image files permitted.");
+        return;
+      }
+      var reader = new FileReader();
+      reader.onload = function(e){
+        process(e.target.result);
+      };
+      reader.readAsDataURL(src);
+    }
+
+    function xhrSend(url, data){
+      let xhr = new XMLHttpRequest();
+      xhr.open('POST', url, true);
+      xhr.onload = function(e) { console.log("upload succ.") };
+      xhr.send(data);
+    }
+
+    function codeGen(datas){
+      let code = "uint8_t pov_buf[] = {";
+      for (let i = 0; i < SCANLINES; i ++){
+        for (let j = 0; j < LEDNUM; j ++){
+          if (j % 4 == 0){
+            code += "<br/>";
+          }
+          code += `${datas[3*(i * LEDNUM + j)]}, `;
+          code += `${datas[3*(i * LEDNUM + j) + 1]}, `;
+          code += `${datas[3*(i * LEDNUM + j) + 2]}, `;
+        }
+      }
+      code += "<br/>";
+      code += "};"
+      return code;
+    }
+
+    function genGamma8(gamma){
+      function range(start, end) {
+        return new Uint8Array(end - start + 1)
+        .fill(0)
+        .map((v, i) => i + start);
+      }
+      return range(0, 255)
+      .map((v, i, a) => Math.round(
+        Math.pow(v/255.0, gamma) * 255)
+      );
+    }
+
+    function drawCircle(ctx, img){
+      ctx.clearRect(0, 0, CANVAS_W, CANVAS_H); //clear canvas
+      ctx.drawImage(img, 0, 0, img.width, img.height, 0, 0, CANVAS_W, CANVAS_H);
+      let imgArray = ctx.getImageData(0, 0, CANVAS_W, CANVAS_H).data;
+      let newArray = new Uint8ClampedArray(CANVAS_W * CANVAS_H * 4); //512 x 512, RGBA
+      let SumPerCell = new Uint32Array(SCANLINES * LEDNUM * 3); // rgb
+      let PixelPerCell = new Uint32Array(SCANLINES * LEDNUM);
+      function distance(x1, y1, x2, y2){
+        return Math.sqrt((x1 - x2)**2 + (y1 - y2)**2);
+      }
+      function getAngle(x1, y1, x2, y2) {
+        var x = x1 - x2,
+            y = y1 - y2;
+        var r = Math.atan2(y, x);
+        if (r >= 0){
+          return r;
+        }
+        else {
+          return r + 2 * Math.PI;
+        }
+      }
+
+      function setPoint(data, x, y, rgba){
+        data[4*(CANVAS_W*y + x)]     = rgba[0];
+        data[4*(CANVAS_W*y + x) + 1] = rgba[1];
+        data[4*(CANVAS_W*y + x) + 2] = rgba[2];
+        data[4*(CANVAS_W*y + x) + 3] = rgba[3];
+      }
+
+      function getPoint(data, x, y){
+        let color = new Uint8Array(4);
+        color[0] = data[4*(CANVAS_W*y + x)];
+        color[1] = data[4*(CANVAS_W*y + x) + 1];
+        color[2] = data[4*(CANVAS_W*y + x) + 2];
+        color[3] = data[4*(CANVAS_W*y + x) + 3];
+        return color;
+      }
+      for (let i = 0; i < CANVAS_W; i++){
+        for (let j = 0; j < CANVAS_H; j++){
+          let px = distance(i, j, CANVAS_W/2, CANVAS_H/2) / (CANVAS_W/2 / LEDNUM);
+          px = Math.floor(px + 0.5);
+          let py = Math.floor(getAngle(i, j, CANVAS_W/2, CANVAS_H/2) / (2 * Math.PI / SCANLINES));
+          if (px < LEDNUM && py < SCANLINES){
+            let pixel = getPoint(imgArray, i, j);
+            SumPerCell[3*(py * LEDNUM + px)] += pixel[0];
+            SumPerCell[3*(py * LEDNUM + px) + 1] += pixel[1];
+            SumPerCell[3*(py * LEDNUM + px) + 2] += pixel[2];
+            PixelPerCell[py * LEDNUM + px] ++;
+          }
+        }
+      }
+
+      for (let i = 0; i < SCANLINES; i ++){
+        for (let j = 0; j < LEDNUM; j ++){
+          SumPerCell[3*(i * LEDNUM + j)]     /= PixelPerCell[i * LEDNUM + j];
+          SumPerCell[3*(i * LEDNUM + j) + 1] /= PixelPerCell[i * LEDNUM + j];
+          SumPerCell[3*(i * LEDNUM + j) + 2] /= PixelPerCell[i * LEDNUM + j];
+        }
+      }
+      for (let i = 0; i < CANVAS_W; i++){
+        for (let j = 0; j < CANVAS_H; j++){
+          let px = distance(i, j, CANVAS_W/2, CANVAS_H/2) / (CANVAS_W/2 / LEDNUM);
+          px = Math.floor(px + 0.5);
+          let py = Math.floor(getAngle(i, j, CANVAS_W/2, CANVAS_H/2) / (2 * Math.PI / SCANLINES));
+          if (px < LEDNUM && py < SCANLINES){
+            let pixel = [
+              SumPerCell[3*(py * LEDNUM + px)],
+              SumPerCell[3*(py * LEDNUM + px) + 1],
+              SumPerCell[3*(py * LEDNUM + px) + 2],
+              255
+            ];
+
+            setPoint(newArray, i, j, pixel);
+          }
+        }
+      }
+      ctx.putImageData(new ImageData(newArray, CANVAS_W, CANVAS_H), 0, 0);
+      //return SumPerCell;
+
+      let cells = new Uint8Array(SCANLINES * LEDNUM * 3);
+      for (let i = 0; i < SCANLINES * LEDNUM * 3; i ++){
+        cells[i] = SumPerCell[i];
+      }
+      return cells;
+    }
+
+    let keyState = 0;
+    let lastKeyState = 0;
+    function uploadKeys(key, upOrDown){
+      el("game-ctl").value = "";
+      let keyMap = new Map([
+        ["w", 0],
+        ["s", 1],
+        ["a", 2],
+        ["d", 3],
+        ["j", 4],
+        ["k", 5],
+      ]);
+
+      let keynum = keyMap.get(key.toLowerCase());
+      if (keynum != undefined){
+        if (upOrDown == "up"){
+          keyState |= 1 << keynum;
+        }
+        else {
+          keyState &= ~(1 << keynum);
+        }
+
+        if (keyState != lastKeyState){
+          lastKeyState = keyState;
+          console.log(`now keyState is ${keyState}`);
+          if (socket.readyState == WebSocket.OPEN){
+            socket.send(new Uint8Array([keyState]));
+          }
+        }
+      }
+    }
+
+    function el(id) {return document.getElementById(id);}
+
+    function init(){
+      let host = window.location.hostname;
+      let port = window.location.port;
+      socket = new WebSocket(`ws://${host}:${port}/ws`);
+      // Connection opened
+      socket.addEventListener('open', function (event) {
+          console.log('websocket connected');
+      });
+
+      // Listen for messages
+      socket.addEventListener('message', function (event) {
+          console.log('Message from server ', event.data);
+      });
+      let canvas = el("image-canvas");
+      let ctx = canvas.getContext("2d");
+      function readImage(){
+        if (this.files && this.files[0]){
+          loadImage(this.files[0], dataurl => {
+            console.log(dataurl);
+            let img = new Image();
+            img.onload = e => {
+              data = drawCircle(ctx, img);
+              el("btn-upload").disabled = false;
+              el("code-gen").innerHTML = codeGen(data);
+            };
+            img.src = dataurl;
+          })
+        }
+      }
+
+      let gamma_adaptor = (x) => x / 10.0;
+      let brightness_adaptor = (x) => x;
+      let rotate_adaptor = (x) => Math.round((x / 127.0) * 360);
+
+      el("imageUpload").addEventListener("change", readImage, false);
+      el("btn-upload").addEventListener("click", () => xhrSend("/upload_image", data), false);
+      el("btn-upload").disabled = true;
+      el("rg-brightness")
+      .addEventListener("change", (e) => xhrSend("/upload_brightness", Uint8Array.from([e.target.value])), false);
+      el("rg-rotate")
+      .addEventListener("change", (e) => xhrSend("/upload_rotate", Uint8Array.from([e.target.value])), false);
+      el("rg-gamma")
+      .addEventListener("change", (e) => xhrSend("/upload_gamma", genGamma8(e.target.value / 10.0)), false);
+      el("rg-brightness")
+      .addEventListener("input", (e) => {
+        el("lbl-brightness").innerHTML = brightness_adaptor(e.target.value);
+      }, false);
+      el("rg-gamma")
+      .addEventListener("input", (e) => {
+        el("lbl-gamma").innerHTML = gamma_adaptor(e.target.value);
+      }, false);
+      el("rg-rotate")
+      .addEventListener("input", (e) => {
+        el("lbl-rotate").innerHTML = rotate_adaptor(e.target.value);
+      }, false);
+
+      el("lbl-gamma").innerHTML = gamma_adaptor(el("rg-gamma").value);
+      el("lbl-brightness").innerHTML = brightness_adaptor(el("rg-brightness").value);
+      el("lbl-rotate").innerHTML = rotate_adaptor(el("rg-rotate").value);
+
+      el("game-ctl").addEventListener("keydown", (e) => uploadKeys(e.key, "up"));
+      el("game-ctl").addEventListener("keyup", (e) => uploadKeys(e.key, "down"));
+    }
+
+    window.addEventListener("load", init);
+  </script>
+</body>
+</html>
+
