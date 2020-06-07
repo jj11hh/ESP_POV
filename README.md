@@ -8,7 +8,7 @@ uploaded from a smartphone via Wi-Fi connnection.
 
 To use it, turn on the device power and connect to the new
 Wi-Fi hotspot named "ESP POV Display"(configurable), and press
-the `Open Image' button and `Upload'.
+the `Open Image` button and `Upload`.
 
 ![test](https://raw.githubusercontent.com/jj11hh/ESP_POV/master/images/test.jpeg)
 ![ui](https://raw.githubusercontent.com/jj11hh/ESP_POV/master/images/ui.jpeg)
