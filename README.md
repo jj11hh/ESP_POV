@@ -14,12 +14,12 @@ the `Open Image` button and `Upload`.
 ![ui](https://raw.githubusercontent.com/jj11hh/ESP_POV/master/images/ui.jpeg)
 ![pcb](https://raw.githubusercontent.com/jj11hh/ESP_POV/master/images/pcb.png)
 
-Dependences:
+Dependencies:
 
 * Arduino Core for ESP8266 > v1.8
 * FixedPoints Library for Arduino
 
-Example Hardware Design:
+Hardware Design (Try to design one yourself):
 
 https://oshwhub.com/yiheng/ju-yu-wang-kong-zhi-di-xuan-zhuailed
 
